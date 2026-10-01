@@ -10,20 +10,10 @@ if not TOKEN:
     print("ERROR: TELEGRAM_BOT_TOKEN is missing")
     sys.exit(1)
 
-try:
-    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-    from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
-    print("telegram imported")
-except Exception as e:
-    print("telegram import error:", e)
-    sys.exit(1)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
-try:
-    from agent import FinanceAgent
-    print("agent imported")
-except Exception as e:
-    print("agent import error:", e)
-    sys.exit(1)
+from agent import FinanceAgent
 
 AMOUNT = float(os.getenv("USER_AMOUNT", "300000"))
 agent = FinanceAgent(amount=AMOUNT)
@@ -70,12 +60,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     print("Creating application...")
     app = Application.builder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("recommend", recommend_cmd))
     app.add_handler(CommandHandler("rates", rates_cmd))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, text_handler))
+    app.add_handler(MessageHandler(filters.TEXT, text_handler))
+
     print("=== BOT STARTED SUCCESSFULLY ===")
     app.run_polling()
 
