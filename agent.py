@@ -1,141 +1,80 @@
-"""
-Финансовый ИИ-агент для рублёвых вложений с минимальным риском.
-Сумма по умолчанию: 300 000 рублей.
-"""
-
-from __future__ import annotations
-
-import os
-from typing import Any
-from data_fetchers import (
-    get_key_rate,
-    get_ofz_short,
-    get_sample_deposit_rates,
-    calculate_net_yield,
-)
-
-SYSTEM_PROMPT = """
-Ты — личный финансовый помощник пользователя по рублёвым инструментам с минимальным риском.
-Сумма капитала пользователя: примерно 300 000 рублей.
-
-Правила:
-1. Рекомендуй ТОЛЬКО инструменты минимального риска:
-   - Вклады в банках в пределах страховки АСВ (1,4 млн рублей).
-   - Короткие ОФЗ (погашение до 1,5-2 лет).
-   - Накопительные счета крупных банков.
-2. Никогда не рекомендуй акции, крипту, корпоративные облигации низкого рейтинга, ПИФы с высокой волатильностью.
-3. Всегда указывай номинальную ставку, примерную доходность после налога, срок и ограничения.
-4. Учитывай текущую ключевую ставку ЦБ.
-5. Если пользователь спрашивает «куда вложить» — дай 2-3 конкретных варианта с расчётом дохода на 300к.
-6. Будь честным: полностью безрисковых инвестиций с высокой доходностью не существует.
-7. Отвечай на русском языке, кратко и структурировано.
-"""
-
+from data_fetchers import get_key_rate, get_ofz_short, get_sample_deposit_rates, net_yield
 
 class FinanceAgent:
-    def __init__(self, amount: float = 300_000):
+    def __init__(self, amount: float = 100000):
         self.amount = amount
-        self.api_key = os.getenv("OPENAI_API_KEY")
-        self.base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        self.model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-    async def get_market_snapshot(self) -> dict[str, Any]:
-        key_rate = await get_key_rate()
-        ofz = await get_ofz_short()
-        deposits = await get_sample_deposit_rates()
+    def set_amount(self, amount: float):
+        self.amount = amount
 
+    async def get_market_snapshot(self):
         return {
-            "key_rate": key_rate,
-            "ofz_short": ofz,
-            "deposits": deposits,
-            "amount": self.amount,
+            "key_rate": await get_key_rate(),
+            "ofz": await get_ofz_short(),
+            "deposits": await get_sample_deposit_rates(),
         }
 
-    def format_snapshot(self, snapshot: dict[str, Any]) -> str:
-        kr = snapshot["key_rate"]
+    def format_snapshot(self, data) -> str:
+        kr = data["key_rate"]
         lines = [
-            "Снимок рынка (рубли)",
+            "СНИМОК РЫНКА",
+            f"Ключевая ставка ЦБ: {kr['rate']}%",
+            f"Текущая сумма: {self.amount:,.0f} руб.",
             "",
-            f"Ключевая ставка ЦБ: {kr['rate']}% (на {kr['date']})",
-            f"Следующее заседание: {kr.get('next_meeting', 'см. сайт ЦБ')}",
-            "",
-            f"Капитал пользователя: {self.amount:,.0f} руб.",
-            "",
-            "Лучшие короткие ОФЗ:",
+            "Короткие ОФЗ:",
         ]
-
-        for i, bond in enumerate(snapshot["ofz_short"][:5], 1):
-            net = calculate_net_yield(bond["ytm"], is_ofz=True)
+        for i, b in enumerate(data["ofz"][:5], 1):
             lines.append(
-                f"{i}. {bond['name']} ({bond['secid']}) - YTM {bond['ytm']}% "
-                f"(примерно {net}% после налога), погашение {bond['matdate']}"
+                f"{i}. {b['name']} - {b['ytm']}% "
+                f"(после налога \~{net_yield(b['ytm'])}%), погашение {b['matdate']}"
             )
 
         lines.append("")
-        lines.append("Примеры вкладов (проверьте актуальность):")
-        for i, dep in enumerate(snapshot["deposits"][:5], 1):
-            net = calculate_net_yield(dep["rate"])
-            income = self.amount * (dep["rate"] / 100) * (dep["term_months"] / 12)
-            net_income = income * 0.87
+        lines.append("Примеры вкладов:")
+        for i, d in enumerate(data["deposits"], 1):
+            income = self.amount * (d["rate"] / 100) * (d["term_months"] / 12) * 0.87
             lines.append(
-                f"{i}. {dep['bank']} «{dep['product']}» - {dep['rate']}% на {dep['term_months']} мес. "
-                f"(примерно {net}% после налога). Примерный доход на 300к: {net_income:,.0f} руб. {dep['note']}"
+                f"{i}. {d['bank']} {d['rate']}% на {d['term_months']} мес. "
+                f"(\~{income:,.0f} руб. чистыми)"
             )
 
-        lines.append("")
-        lines.append("Данные по вкладам ориентировочные. Перед открытием проверяйте на сайте банка.")
         return "\n".join(lines)
 
-    async def recommend(self) -> str:
-        snapshot = await self.get_market_snapshot()
-        text = self.format_snapshot(snapshot)
+    async def recommend(self, months: int = 6) -> str:
+        data = await self.get_market_snapshot()
+        text = self.format_snapshot(data)
 
-        recommendation = (
-            "\n\n"
-            "Рекомендация агента для 300 000 рублей (минимальный риск):\n\n"
-            "1. Основной вариант — вклад в надёжном банке на 3-6 месяцев под максимальную доступную ставку "
-            "(сейчас ориентир 13,5-14,5%). Вся сумма в пределах АСВ.\n"
-            "2. Альтернатива — короткие ОФЗ с погашением в 2027 году. "
-            "Можно купить через брокера (Тинькофф, ВТБ, Сбер и т.д.).\n"
-            "3. Часть на накопительный счёт (10-20%) — для гибкости.\n\n"
-            "Не кладите все деньги в один банк на максимальный срок, если может понадобиться доступ раньше."
-        )
-        return text + recommendation
-
-    async def answer(self, user_question: str) -> str:
-        snapshot = await self.get_market_snapshot()
-        context = self.format_snapshot(snapshot)
-
-        if not self.api_key:
-            q = user_question.lower()
-            if any(w in q for w in ["куда", "вложить", "рекоменд", "совет"]):
-                return await self.recommend()
-            if "офз" in q or "облигац" in q:
-                return context
-            if "вклад" in q or "депозит" in q:
-                return context
-            return (
-                "Я финансовый агент по рублёвым инструментам минимального риска.\n"
-                "Спросите: куда вложить, ставки по вкладам, короткие ОФЗ или /recommend"
+        if months <= 3:
+            advice = (
+                "\n\nРЕКОМЕНДАЦИЯ НА 1-3 МЕСЯЦА:\n"
+                "Лучше короткий вклад под максимальную ставку.\n"
+                "ОФЗ тоже подходят, если нужна возможность продать раньше."
+            )
+        elif months <= 6:
+            advice = (
+                "\n\nРЕКОМЕНДАЦИЯ НА 3-6 МЕСЯЦЕВ:\n"
+                "1. Вклад 3-6 месяцев в надёжном банке.\n"
+                "2. Короткие ОФЗ с погашением в 2027.\n"
+                "Вся сумма в пределах АСВ (до 1.4 млн)."
+            )
+        else:
+            advice = (
+                "\n\nРЕКОМЕНДАЦИЯ НА 6-12 МЕСЯЦЕВ:\n"
+                "Можно часть в ОФЗ, часть во вклад.\n"
+                "Не ставь всё на максимальный срок."
             )
 
-        try:
-            from openai import AsyncOpenAI
+        return text + advice
 
-            client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": f"Текущие данные рынка:\n{context}\n\nВопрос пользователя: {user_question}",
-                },
-            ]
-            resp = await client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=0.3,
-                max_tokens=800,
-            )
-            return resp.choices[0].message.content or "Не удалось получить ответ."
-        except Exception as e:
-            return f"Ошибка LLM: {e}\n\nFallback:\n{await self.recommend()}"
+    async def answer(self, question: str) -> str:
+        q = question.lower()
+        if any(w in q for w in ["куда", "вложить", "рекоменд", "совет"]):
+            return await self.recommend(6)
+        if "3 месяц" in q or "три месяц" in q:
+            return await self.recommend(3)
+        if "12" in q or "год" in q:
+            return await self.recommend(12)
+        if "офз" in q or "облигац" in q or "вклад" in q or "депозит" in q:
+            data = await self.get_market_snapshot()
+            return self.format_snapshot(data)
+        return "Напиши: куда вложить, /recommend, /rates, /amount 150000 или /subscribe"
