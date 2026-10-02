@@ -10,12 +10,11 @@ if not TOKEN:
     print("ERROR: TELEGRAM_BOT_TOKEN missing")
     sys.exit(1)
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -41,6 +40,15 @@ def save_json(path, data):
 portfolios = load_json(PORTFOLIO_FILE, {})
 subscribers = set(load_json(SUB_FILE, []))
 
+def main_keyboard():
+    keyboard = [
+        [KeyboardButton("Топ-3"), KeyboardButton("Снимок рынка")],
+        [KeyboardButton("Рекомендация"), KeyboardButton("Сравнение")],
+        [KeyboardButton("Калькулятор"), KeyboardButton("Портфель")],
+        [KeyboardButton("Моя сумма"), KeyboardButton("Подписка")],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 def get_agent(chat_id: int) -> FinanceAgent:
     amount = user_amounts.get(chat_id, DEFAULT_AMOUNT)
     return FinanceAgent(amount=amount)
@@ -48,42 +56,25 @@ def get_agent(chat_id: int) -> FinanceAgent:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     amount = user_amounts.get(chat_id, DEFAULT_AMOUNT)
-    kb = [
-        [
-            InlineKeyboardButton("Топ-3", callback_data="top3"),
-            InlineKeyboardButton("Снимок", callback_data="rates"),
-        ],
-        [
-            InlineKeyboardButton("Рекомендация", callback_data="recommend"),
-            InlineKeyboardButton("Сравнение", callback_data="compare"),
-        ],
-        [
-            InlineKeyboardButton("Портфель", callback_data="portfolio"),
-        ],
-    ]
     text = (
         f"Финансовый агент\n"
         f"Текущая сумма: {amount:,.0f} руб.\n\n"
-        "Команды:\n"
-        "/top3 - лучшие варианты сейчас\n"
-        "/rates - снимок рынка\n"
-        "/recommend - рекомендация\n"
-        "/compare [мес] - сравнение\n"
-        "/calc 150000 6 - калькулятор\n"
-        "/amount 150000 - сумма\n"
+        "Выберите действие кнопками внизу\n"
+        "или команды:\n"
+        "/calc 150000 6\n"
+        "/amount 150000\n"
         "/hold вклад ВТБ 150000 13.7 6\n"
-        "/portfolio - мой портфель\n"
-        "/subscribe - еженедельная сводка\n"
-        "/unsubscribe - отключить"
+        "/clearportfolio"
     )
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text(text, reply_markup=main_keyboard())
 
 async def amount_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if not context.args:
         current = user_amounts.get(chat_id, DEFAULT_AMOUNT)
         await update.message.reply_text(
-            f"Текущая сумма: {current:,.0f} руб.\nПример: /amount 150000"
+            f"Текущая сумма: {current:,.0f} руб.\nПример: /amount 150000",
+            reply_markup=main_keyboard(),
         )
         return
     try:
@@ -93,7 +84,10 @@ async def amount_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Сумма от 1000 до 10 млн")
             return
         user_amounts[chat_id] = new_amount
-        await update.message.reply_text(f"Сумма: {new_amount:,.0f} руб.")
+        await update.message.reply_text(
+            f"Сумма: {new_amount:,.0f} руб.",
+            reply_markup=main_keyboard(),
+        )
     except Exception:
         await update.message.reply_text("Пример: /amount 150000")
 
@@ -101,20 +95,20 @@ async def top3_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     agent = get_agent(update.effective_chat.id)
     await update.message.reply_text("Считаю топ...")
     text = await agent.top3()
-    await update.message.reply_text(text[:4000])
+    await update.message.reply_text(text[:4000], reply_markup=main_keyboard())
 
 async def rates_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     agent = get_agent(update.effective_chat.id)
     await update.message.reply_text("Загружаю...")
     data = await agent.get_market_snapshot()
     text = agent.format_snapshot(data)
-    await update.message.reply_text(text[:4000])
+    await update.message.reply_text(text[:4000], reply_markup=main_keyboard())
 
 async def recommend_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     agent = get_agent(update.effective_chat.id)
     await update.message.reply_text("Считаю...")
     text = await agent.recommend(6)
-    await update.message.reply_text(text[:4000])
+    await update.message.reply_text(text[:4000], reply_markup=main_keyboard())
 
 async def compare_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     agent = get_agent(update.effective_chat.id)
@@ -126,7 +120,7 @@ async def compare_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
     await update.message.reply_text("Сравниваю...")
     text = await agent.compare(months)
-    await update.message.reply_text(text[:4000])
+    await update.message.reply_text(text[:4000], reply_markup=main_keyboard())
 
 async def calc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     agent = get_agent(update.effective_chat.id)
@@ -144,15 +138,14 @@ async def calc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
     await update.message.reply_text("Считаю...")
     text = await agent.calc(amount, months)
-    await update.message.reply_text(text[:4000])
+    await update.message.reply_text(text[:4000], reply_markup=main_keyboard())
 
 async def hold_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
-    # /hold вклад ВТБ 150000 13.7 6
     if len(context.args) < 5:
         await update.message.reply_text(
-            "Формат:\n/hold вклад ВТБ 150000 13.7 6\n"
-            "тип банк сумма ставка месяцы"
+            "Формат:\n/hold вклад ВТБ 150000 13.7 6\nтип банк сумма ставка месяцы",
+            reply_markup=main_keyboard(),
         )
         return
     try:
@@ -174,11 +167,13 @@ async def hold_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         portfolios[chat_id].append(item)
         save_json(PORTFOLIO_FILE, portfolios)
         await update.message.reply_text(
-            f"Добавлено: {h_type} {bank} {amount:,.0f} руб. @ {rate}% / {months} мес."
+            f"Добавлено: {h_type} {bank} {amount:,.0f} руб. @ {rate}% / {months} мес.",
+            reply_markup=main_keyboard(),
         )
     except Exception:
         await update.message.reply_text(
-            "Ошибка. Пример:\n/hold вклад ВТБ 150000 13.7 6"
+            "Ошибка. Пример:\n/hold вклад ВТБ 150000 13.7 6",
+            reply_markup=main_keyboard(),
         )
 
 async def portfolio_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -186,53 +181,103 @@ async def portfolio_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     agent = get_agent(update.effective_chat.id)
     holdings = portfolios.get(chat_id, [])
     text = agent.format_portfolio(holdings)
-    await update.message.reply_text(text[:4000])
+    await update.message.reply_text(text[:4000], reply_markup=main_keyboard())
 
 async def clear_portfolio_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     portfolios[chat_id] = []
     save_json(PORTFOLIO_FILE, portfolios)
-    await update.message.reply_text("Портфель очищен.")
+    await update.message.reply_text("Портфель очищен.", reply_markup=main_keyboard())
 
 async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     subscribers.add(chat_id)
     save_json(SUB_FILE, list(subscribers))
     await update.message.reply_text(
-        "Подписка включена.\nКаждое воскресенье в 10:00 МСК пришлю сводку."
+        "Подписка включена.\nКаждое воскресенье в 10:00 МСК пришлю сводку.",
+        reply_markup=main_keyboard(),
     )
 
 async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     subscribers.discard(chat_id)
     save_json(SUB_FILE, list(subscribers))
-    await update.message.reply_text("Подписка отключена.")
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    agent = get_agent(query.message.chat_id)
-    data = query.data
-
-    if data == "top3":
-        text = await agent.top3()
-    elif data == "recommend":
-        text = await agent.recommend(6)
-    elif data == "compare":
-        text = await agent.compare(6)
-    elif data == "portfolio":
-        holdings = portfolios.get(str(query.message.chat_id), [])
-        text = agent.format_portfolio(holdings)
-    else:
-        snap = await agent.get_market_snapshot()
-        text = agent.format_snapshot(snap)
-
-    await query.edit_message_text(text[:4000])
+    await update.message.reply_text("Подписка отключена.", reply_markup=main_keyboard())
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    agent = get_agent(update.effective_chat.id)
-    answer = await agent.answer(update.message.text)
-    await update.message.reply_text(answer[:4000])
+    text = (update.message.text or "").strip()
+    chat_id = update.effective_chat.id
+    agent = get_agent(chat_id)
+
+    if text == "Топ-3":
+        await update.message.reply_text("Считаю топ...")
+        result = await agent.top3()
+        await update.message.reply_text(result[:4000], reply_markup=main_keyboard())
+        return
+
+    if text == "Снимок рынка":
+        await update.message.reply_text("Загружаю...")
+        data = await agent.get_market_snapshot()
+        result = agent.format_snapshot(data)
+        await update.message.reply_text(result[:4000], reply_markup=main_keyboard())
+        return
+
+    if text == "Рекомендация":
+        await update.message.reply_text("Считаю...")
+        result = await agent.recommend(6)
+        await update.message.reply_text(result[:4000], reply_markup=main_keyboard())
+        return
+
+    if text == "Сравнение":
+        await update.message.reply_text("Сравниваю...")
+        result = await agent.compare(6)
+        await update.message.reply_text(result[:4000], reply_markup=main_keyboard())
+        return
+
+    if text == "Калькулятор":
+        amount = user_amounts.get(chat_id, DEFAULT_AMOUNT)
+        await update.message.reply_text("Считаю...")
+        result = await agent.calc(amount, 6)
+        await update.message.reply_text(
+            result[:4000] + "\n\nДругая сумма: /calc 200000 6",
+            reply_markup=main_keyboard(),
+        )
+        return
+
+    if text == "Портфель":
+        holdings = portfolios.get(str(chat_id), [])
+        result = agent.format_portfolio(holdings)
+        await update.message.reply_text(result[:4000], reply_markup=main_keyboard())
+        return
+
+    if text == "Моя сумма":
+        current = user_amounts.get(chat_id, DEFAULT_AMOUNT)
+        await update.message.reply_text(
+            f"Текущая сумма: {current:,.0f} руб.\n"
+            "Изменить: /amount 150000",
+            reply_markup=main_keyboard(),
+        )
+        return
+
+    if text == "Подписка":
+        if chat_id in subscribers:
+            subscribers.discard(chat_id)
+            save_json(SUB_FILE, list(subscribers))
+            await update.message.reply_text(
+                "Подписка отключена.",
+                reply_markup=main_keyboard(),
+            )
+        else:
+            subscribers.add(chat_id)
+            save_json(SUB_FILE, list(subscribers))
+            await update.message.reply_text(
+                "Подписка включена.\nКаждое воскресенье в 10:00 МСК.",
+                reply_markup=main_keyboard(),
+            )
+        return
+
+    answer = await agent.answer(text)
+    await update.message.reply_text(answer[:4000], reply_markup=main_keyboard())
 
 async def weekly_job(context: ContextTypes.DEFAULT_TYPE):
     if not subscribers:
@@ -283,7 +328,6 @@ def main():
     app.add_handler(CommandHandler("clearportfolio", clear_portfolio_cmd))
     app.add_handler(CommandHandler("subscribe", subscribe))
     app.add_handler(CommandHandler("unsubscribe", unsubscribe))
-    app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT, text_handler))
     print("=== BOT STARTED ===")
     app.run_polling()
