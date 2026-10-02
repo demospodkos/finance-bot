@@ -34,7 +34,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [
             InlineKeyboardButton("Снимок", callback_data="rates"),
             InlineKeyboardButton("Рекомендация", callback_data="recommend"),
-        ]
+        ],
+        [
+            InlineKeyboardButton("Сравнение", callback_data="compare"),
+        ],
     ]
     text = (
         f"Финансовый агент\n"
@@ -42,7 +45,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Команды:\n"
         "/amount 150000 - установить сумму\n"
         "/recommend - рекомендация\n"
-        "/rates - снимок рынка"
+        "/rates - снимок рынка\n"
+        "/compare - сравнение вкладов и ОФЗ"
     )
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -79,12 +83,26 @@ async def rates_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = agent.format_snapshot(data)
     await update.message.reply_text(text[:4000])
 
+async def compare_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    agent = get_agent(update.effective_chat.id)
+    months = 6
+    if context.args:
+        try:
+            months = int(context.args[0])
+        except Exception:
+            pass
+    await update.message.reply_text("Сравниваю...")
+    text = await agent.compare(months)
+    await update.message.reply_text(text[:4000])
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     agent = get_agent(query.message.chat_id)
     if query.data == "recommend":
         text = await agent.recommend(6)
+    elif query.data == "compare":
+        text = await agent.compare(6)
     else:
         data = await agent.get_market_snapshot()
         text = agent.format_snapshot(data)
@@ -101,6 +119,7 @@ def main():
     app.add_handler(CommandHandler("amount", amount_cmd))
     app.add_handler(CommandHandler("recommend", recommend_cmd))
     app.add_handler(CommandHandler("rates", rates_cmd))
+    app.add_handler(CommandHandler("compare", compare_cmd))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT, text_handler))
     print("=== BOT STARTED ===")

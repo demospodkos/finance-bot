@@ -3,7 +3,9 @@ from data_fetchers import (
     get_ofz_short,
     get_sample_deposit_rates,
     get_currency_rates,
+    get_inflation,
     net_yield,
+    real_yield,
 )
 
 class FinanceAgent:
@@ -19,21 +21,22 @@ class FinanceAgent:
             "ofz": await get_ofz_short(),
             "deposits": await get_sample_deposit_rates(),
             "currencies": await get_currency_rates(),
+            "inflation": await get_inflation(),
         }
 
     def format_snapshot(self, data) -> str:
         kr = data["key_rate"]
         cur = data["currencies"]
+        infl = data["inflation"]
 
         lines = [
             "СНИМОК РЫНКА",
             f"Ключевая ставка ЦБ: {kr['rate']}%",
+            f"Инфляция: {infl['rate']}% (на {infl['date']})",
             f"Текущая сумма: {self.amount:,.0f} руб.",
             "",
             "Курсы валют ЦБ:",
-            f"USD: {cur['USD']} руб.",
-            f"EUR: {cur['EUR']} руб.",
-            f"CNY: {cur['CNY']} руб.",
+            f"USD: {cur['USD']} руб. | EUR: {cur['EUR']} руб. | CNY: {cur['CNY']} руб.",
             f"(на {cur['date']})",
             "",
             "Короткие ОФЗ:",
@@ -41,20 +44,63 @@ class FinanceAgent:
 
         for i, b in enumerate(data["ofz"][:5], 1):
             ny = net_yield(b["ytm"])
+            ry = real_yield(b["ytm"], infl["rate"])
             lines.append(
-                f"{i}. {b['name']} - {b['ytm']}% (после налога {ny}%), погашение {b['matdate']}"
+                f"{i}. {b['name']} - {b['ytm']}% "
+                f"(после налога {ny}%, реальная {ry}%), погашение {b['matdate']}"
             )
 
         lines.append("")
-        lines.append("Примеры вкладов (крупные банки):")
-        for i, d in enumerate(data["deposits"][:12], 1):
+        lines.append("Примеры вкладов (топ банки):")
+        for i, d in enumerate(data["deposits"][:15], 1):
             income = self.amount * (d["rate"] / 100) * (d["term_months"] / 12) * 0.87
+            ry = real_yield(d["rate"], infl["rate"])
             note = f" ({d['note']})" if d.get("note") else ""
             lines.append(
                 f"{i}. {d['bank']} {d['rate']}% на {d['term_months']} мес. "
-                f"({income:,.0f} руб. чистыми){note}"
+                f"({income:,.0f} руб. чистыми, реальная {ry}%){note}"
             )
 
+        return "\n".join(lines)
+
+    async def compare(self, months: int = 6) -> str:
+        data = await self.get_market_snapshot()
+        infl = data["inflation"]["rate"]
+
+        lines = [
+            f"СРАВНЕНИЕ НА {months} МЕСЯЦЕВ",
+            f"Сумма: {self.amount:,.0f} руб.",
+            f"Инфляция: {infl}%",
+            "",
+        ]
+
+        suitable_deps = [d for d in data["deposits"] if d["term_months"] <= months + 1]
+        suitable_deps.sort(key=lambda x: x["rate"], reverse=True)
+
+        lines.append("Лучшие вклады:")
+        for i, d in enumerate(suitable_deps[:7], 1):
+            income = self.amount * (d["rate"] / 100) * (months / 12) * 0.87
+            ry = real_yield(d["rate"], infl)
+            lines.append(
+                f"{i}. {d['bank']} {d['rate']}% -> ~{income:,.0f} руб. чистыми "
+                f"(реальная {ry}%)"
+            )
+
+        lines.append("")
+        lines.append("Короткие ОФЗ:")
+        for i, b in enumerate(data["ofz"][:5], 1):
+            income = self.amount * (b["ytm"] / 100) * (months / 12) * 0.87
+            ry = real_yield(b["ytm"], infl)
+            lines.append(
+                f"{i}. {b['name']} {b['ytm']}% -> ~{income:,.0f} руб. "
+                f"(реальная {ry}%), погашение {b['matdate']}"
+            )
+
+        lines.append("")
+        lines.append(
+            "Вывод: сравнивай реальную доходность. "
+            "Вклады проще и в пределах АСВ, ОФЗ можно продать раньше."
+        )
         return "\n".join(lines)
 
     async def recommend(self, months: int = 6) -> str:
@@ -87,6 +133,8 @@ class FinanceAgent:
         q = question.lower()
         if any(w in q for w in ["куда", "вложить", "рекоменд", "совет"]):
             return await self.recommend(6)
+        if "сравн" in q or "compare" in q:
+            return await self.compare(6)
         if "курс" in q or "доллар" in q or "евро" in q or "юань" in q:
             data = await self.get_market_snapshot()
             cur = data["currencies"]
@@ -103,4 +151,4 @@ class FinanceAgent:
         if "офз" in q or "облигац" in q or "вклад" in q or "депозит" in q:
             data = await self.get_market_snapshot()
             return self.format_snapshot(data)
-        return "Напиши: куда вложить, курс доллара, /recommend, /rates, /amount 150000"
+        return "Команды: /recommend, /rates, /compare, /amount 150000"
